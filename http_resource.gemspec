@@ -17,7 +17,7 @@ Gem::Specification.new do |spec|
                      "path segments can never escape the protocol. Bring a base_url " \
                      "and an auth strategy; build clients and resources on top. " \
                      "Zero runtime dependencies (stdlib only)."
-  spec.homepage = "https://github.com/Skiftet/http-resource"
+  spec.homepage = "https://github.com/Skiftet/http_resource"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2"
 
