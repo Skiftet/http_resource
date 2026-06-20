@@ -1,0 +1,43 @@
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  SuggestExtensions: false
+
+# House style: this gem prefers double quotes and slightly roomier methods than
+# the defaults, in line with the reference implementation it was extracted from.
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+Style/Documentation:
+  Enabled: false
+
+Metrics/MethodLength:
+  Max: 20
+
+Metrics/AbcSize:
+  Max: 25
+
+Metrics/BlockLength:
+  Exclude:
+    - "spec/**/*"
+
+Metrics/ClassLength:
+  Exclude:
+    - "spec/**/*"
+
+Layout/LineLength:
+  Max: 110
+
+# Net::HTTP's request building reads fine as one short begin/rescue method.
+Metrics/CyclomaticComplexity:
+  Max: 8
+
+# Keyword args with defaults (base_url:, auth:, timeouts:) are self-documenting;
+# don't count them against the positional-parameter budget.
+Metrics/ParameterLists:
+  CountKeywordArgs: false
+
+# RSpec defines a shared adversarial-input table at example-group scope on purpose.
+Lint/ConstantDefinitionInBlock:
+  Exclude:
+    - "spec/**/*"
