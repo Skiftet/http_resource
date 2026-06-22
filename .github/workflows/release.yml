@@ -1,0 +1,29 @@
+name: Release
+
+# Publishes the gem to RubyGems.org via Trusted Publishing (OIDC) — no stored
+# API key or secret. Deliberate, manual trigger: bump HttpResource::VERSION on
+# main, commit, then run this workflow. rubygems/release-gem runs `rake release`
+# (guard-clean → build → tag v<version> → push tag → gem push) plus a build
+# provenance attestation. A version already on RubyGems, or an existing tag,
+# makes it fail safely rather than double-publishing.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write # release-gem pushes the v<version> git tag
+  id-token: write # OIDC token for RubyGems Trusted Publishing
+
+jobs:
+  release:
+    name: Build & publish to RubyGems
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Test before publishing
+        run: bundle exec rspec
+      - uses: rubygems/release-gem@v1
