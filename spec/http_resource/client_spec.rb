@@ -76,6 +76,102 @@ RSpec.describe HttpResource::Client do
     end
   end
 
+  describe "form-encoded bodies (form:)" do
+    it "POSTs application/x-www-form-urlencoded and parses the JSON reply (OAuth token)" do
+      stub = stub_request(:post, "#{base_url}/oauth/token")
+             .with(basic_auth: %w[u p],
+                   headers: { "Content-Type" => "application/x-www-form-urlencoded",
+                              "Accept" => "application/json" },
+                   body: { grant_type: "client_credentials", scope: "a b" })
+             .to_return(status: 200, body: { access_token: "tok" }.to_json)
+      expect(client.post(%w[oauth token], form: { grant_type: "client_credentials", scope: "a b" }))
+        .to eq("access_token" => "tok")
+      expect(stub).to have_been_requested
+    end
+
+    it "URL-encodes keys/values (reserved chars), not JSON" do
+      stub = stub_request(:post, "#{base_url}/oauth/token")
+             .with(body: "grant_type=authorization_code&redirect_uri=https%3A%2F%2Fa.test%2Fcb")
+             .to_return(status: 200, body: "{}")
+      client.post(%w[oauth token],
+                  form: { grant_type: "authorization_code", redirect_uri: "https://a.test/cb" })
+      expect(stub).to have_been_requested
+    end
+
+    it "encodes an array form value as repeated keys" do
+      stub = stub_request(:post, "#{base_url}/oauth/token").with(body: "scope=a&scope=b")
+                                                           .to_return(status: 200, body: "{}")
+      client.post(%w[oauth token], form: { scope: %w[a b] })
+      expect(stub).to have_been_requested
+    end
+
+    it "surfaces a non-2xx form POST as a typed ApiError carrying the error payload (invalid_grant)" do
+      stub_request(:post, "#{base_url}/oauth/token")
+        .to_return(status: 400, body: { error: "invalid_grant" }.to_json)
+      expect { client.post(%w[oauth token], form: { grant_type: "authorization_code", code: "bad" }) }
+        .to raise_error(HttpResource::ClientError) do |e|
+          expect(e.status).to eq(400)
+          expect(JSON.parse(e.body)).to eq("error" => "invalid_grant")
+        end
+    end
+
+    it "supports form bodies on PUT and PATCH too" do
+      put = stub_request(:put, "#{base_url}/api/x")
+            .with(headers: { "Content-Type" => "application/x-www-form-urlencoded" }, body: { a: "1" })
+            .to_return(status: 200, body: "{}")
+      patch = stub_request(:patch, "#{base_url}/api/x")
+              .with(headers: { "Content-Type" => "application/x-www-form-urlencoded" }, body: { b: "2" })
+              .to_return(status: 200, body: "{}")
+      client.put(%w[api x], form: { a: 1 })
+      client.patch(%w[api x], form: { b: 2 })
+      expect(put).to have_been_requested
+      expect(patch).to have_been_requested
+    end
+
+    it "PUT also takes a JSON body (the new verb mirrors post/patch)" do
+      stub = stub_request(:put, "#{base_url}/api/x")
+             .with(headers: { "Content-Type" => "application/json" }, body: { a: 1 }.to_json)
+             .to_return(status: 200, body: "{}")
+      client.put(%w[api x], { a: 1 })
+      expect(stub).to have_been_requested
+    end
+
+    %i[post put patch].each do |verb|
+      it "#{verb} raises ArgumentError (and makes NO request) when given BOTH a payload and form:" do
+        expect { client.public_send(verb, %w[api x], { a: 1 }, form: { b: 2 }) }
+          .to raise_error(ArgumentError, /both/)
+      end
+    end
+
+    it "sends an empty form ({}) as an empty body, with the form Content-Type still set" do
+      stub = stub_request(:post, "#{base_url}/oauth/token")
+             .with(headers: { "Content-Type" => "application/x-www-form-urlencoded" }, body: "")
+             .to_return(status: 200, body: "{}")
+      client.post(%w[oauth token], form: {})
+      expect(stub).to have_been_requested
+    end
+
+    it "encodes a non-ASCII form value as UTF-8 with space as '+' (form convention, not %20)" do
+      stub = stub_request(:post, "#{base_url}/oauth/token").with(body: "name=%C3%85sa+%C3%96berg")
+                                                           .to_return(status: 200, body: "{}")
+      client.post(%w[oauth token], form: { name: "Åsa Öberg" })
+      expect(stub).to have_been_requested
+    end
+
+    it "PUT with neither a payload nor form sends no body and no Content-Type" do
+      stub = stub_request(:put, "#{base_url}/api/x")
+             .with { |req| req.body.to_s.empty? && !req.headers.key?("Content-Type") }
+             .to_return(status: 200, body: "{}")
+      client.put(%w[api x])
+      expect(stub).to have_been_requested
+    end
+
+    it "does NOT accept form: on the bodyless verbs get/delete (keeps the surface honest)" do
+      expect { client.get(%w[api x], form: { a: 1 }) }.to raise_error(ArgumentError)
+      expect { client.delete(%w[api x], form: { a: 1 }) }.to raise_error(ArgumentError)
+    end
+  end
+
   describe "status -> typed error" do
     {
       404 => HttpResource::NotFoundError,

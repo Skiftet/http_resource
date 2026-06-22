@@ -21,7 +21,11 @@ Metrics/BlockLength:
   Exclude:
     - "spec/**/*"
 
+# The Client is one cohesive Net::HTTP transport (5 verbs + URI building, escape
+# encoding, request/response handling); splitting it would hurt readability more
+# than the extra lines cost. Roomier ceiling, in line with MethodLength above.
 Metrics/ClassLength:
+  Max: 120
   Exclude:
     - "spec/**/*"
 

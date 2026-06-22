@@ -8,13 +8,14 @@ require "openssl"
 
 module HttpResource
   # Net::HTTP transport for a single REST host. Resource-oriented: the verbs
-  # (get/post/patch/delete) are the primitives a Resource is built on, and also
-  # an escape hatch for endpoints not yet modelled.
+  # (get/post/put/patch/delete) are the primitives a Resource is built on, and
+  # also an escape hatch for endpoints not yet modelled.
   #
   #   client = HttpResource::Client.new(base_url: "https://api.example.org",
   #                                     auth: HttpResource::Auth.bearer(token))
-  #   client.get(["api", "contacts", id])         # GET, id escaped as one segment
-  #   client.post(["api", "actions"], { ... })    # POST a JSON body
+  #   client.get(["api", "contacts", id])            # GET, id escaped as one segment
+  #   client.post(["api", "actions"], { ... })       # POST a JSON body
+  #   client.post(["oauth", "token"], form: { ... }) # POST a form body (OAuth, RFC 6749)
   #
   # Reads return parsed JSON (a Hash/Array, or nil on an empty body). Every call
   # raises an HttpResource::ApiError subclass on a non-2xx response or a transport
@@ -45,31 +46,45 @@ module HttpResource
     # an Array of segments (["api", "contacts", email]) each individually escaped.
     # Each verb accepts open_timeout:/read_timeout: to override the client's
     # budget for that one call (e.g. a short read_timeout on a synchronous read).
-    def get(path, params: nil, **timeouts)
-      request(:get, path, params:, **timeouts)
+    #
+    # The body-bearing verbs (post/put/patch) send EITHER a JSON body — the
+    # positional `payload` — or a form body — `form: {...}`, encoded as
+    # application/x-www-form-urlencoded (for the form-encoded endpoints OAuth
+    # consumers hit: RFC 6749 token, RFC 7662 introspection, …). Passing both is
+    # a caller bug and raises ArgumentError. The response side is identical either
+    # way: parsed JSON on a 2xx, a typed ApiError (with #status + #body) on a
+    # non-2xx — so a "400 invalid_grant" is a rescue-able ClientError whose #body
+    # carries the error payload.
+    def get(path, params: nil, open_timeout: nil, read_timeout: nil)
+      request(:get, path, params:, open_timeout:, read_timeout:)
     end
 
-    def post(path, payload = nil, **timeouts)
-      request(:post, path, body: payload, **timeouts)
+    def post(path, payload = nil, form: nil, open_timeout: nil, read_timeout: nil)
+      request(:post, path, body: payload, form:, open_timeout:, read_timeout:)
     end
 
-    def patch(path, payload = nil, **timeouts)
-      request(:patch, path, body: payload, **timeouts)
+    def put(path, payload = nil, form: nil, open_timeout: nil, read_timeout: nil)
+      request(:put, path, body: payload, form:, open_timeout:, read_timeout:)
     end
 
-    def delete(path, **timeouts)
-      request(:delete, path, **timeouts)
+    def patch(path, payload = nil, form: nil, open_timeout: nil, read_timeout: nil)
+      request(:patch, path, body: payload, form:, open_timeout:, read_timeout:)
+    end
+
+    def delete(path, open_timeout: nil, read_timeout: nil)
+      request(:delete, path, open_timeout:, read_timeout:)
     end
 
     private
 
-    def request(method, path, body: nil, params: nil, open_timeout: nil, read_timeout: nil)
+    def request(method, path, body: nil, form: nil, params: nil, open_timeout: nil, read_timeout: nil)
       # Build the URI + request OUTSIDE the network rescue: a URI::InvalidURIError
-      # (bad path) or JSON::GeneratorError (un-serializable payload, e.g. a NaN
-      # amount) is a deterministic caller bug, and must NOT be masked as a
-      # retryable TransportError — that would have a worker retry it forever.
+      # (bad path), JSON::GeneratorError (un-serializable payload, e.g. a NaN
+      # amount) or an ArgumentError (both a JSON and a form body) is a
+      # deterministic caller bug, and must NOT be masked as a retryable
+      # TransportError — that would have a worker retry it forever.
       uri = build_uri(path, params)
-      req = build_request(method, uri, body)
+      req = build_request(method, uri, body, form)
       connection = http(uri, open_timeout:, read_timeout:)
       begin
         handle(connection.request(req))
@@ -116,19 +131,32 @@ module HttpResource
       ERB::Util.url_encode(str)
     end
 
-    def build_request(method, uri, body)
+    def build_request(method, uri, body, form = nil)
       klass = {
-        get: Net::HTTP::Get, post: Net::HTTP::Post,
+        get: Net::HTTP::Get, post: Net::HTTP::Post, put: Net::HTTP::Put,
         patch: Net::HTTP::Patch, delete: Net::HTTP::Delete
       }.fetch(method)
       request = klass.new(uri)
       @auth&.apply(request)
       request["Accept"] = "application/json"
-      if body
+      apply_body(request, body, form)
+      request
+    end
+
+    # A request carries EITHER a JSON body (`payload`) or a form body (`form:`),
+    # never both — passing both is a caller bug. Form values are percent-encoded
+    # by URI.encode_www_form (the same encoder used for query params), so an
+    # untrusted key/value can't inject a header, a second field, or CRLF.
+    def apply_body(request, body, form)
+      raise ArgumentError, "pass either a JSON payload or form:, not both" if body && form
+
+      if form
+        request["Content-Type"] = "application/x-www-form-urlencoded"
+        request.body = URI.encode_www_form(form)
+      elsif body
         request["Content-Type"] = "application/json"
         request.body = JSON.generate(body)
       end
-      request
     end
 
     def http(uri, open_timeout: nil, read_timeout: nil)

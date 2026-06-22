@@ -54,6 +54,7 @@ client = HttpResource::Client.new(
 
 client.get(["api", "contacts", id])          # GET, id escaped as ONE path segment
 client.post(["api", "actions"], { foo: 1 })  # POST a JSON body
+client.put(["api", "contacts", id], { name: "Anna" })
 client.patch(["api", "contacts", email], { name: "Anna" })
 client.delete(["api", "contacts", id])
 ```
@@ -64,6 +65,37 @@ has each segment percent-encoded (see [Escape safety](#escape-safety)).
 Reads return parsed JSON (a `Hash`/`Array`, or `nil` on an empty body). Every
 call raises an `HttpResource::ApiError` subclass on a non-2xx response or a
 transport failure.
+
+### Form-encoded bodies (OAuth)
+
+`post`/`put`/`patch` take a `form:` keyword to send an
+`application/x-www-form-urlencoded` body instead of JSON — for the form-encoded
+endpoints OAuth consumers hit (RFC 6749 token, RFC 7662 introspection, …):
+
+```ruby
+token = client.post(["oauth", "token"], form: {
+  grant_type: "client_credentials",
+  scope: "read write"
+})
+token["access_token"]   # a 2xx still returns parsed JSON
+```
+
+The response side is identical to a JSON call — parsed JSON on a 2xx, a typed
+`ApiError` on a non-2xx — so an OAuth failure is just a rescue-able error whose
+`#body` carries the payload:
+
+```ruby
+begin
+  client.post(["oauth", "token"], form: { grant_type: "authorization_code", code: bad })
+rescue HttpResource::ClientError => e
+  e.status                    # => 400
+  JSON.parse(e.body)["error"] # => "invalid_grant"
+end
+```
+
+Pass **either** a JSON `payload` **or** `form:`, never both (it raises
+`ArgumentError`). Form keys/values are percent-encoded, so untrusted input can't
+inject a header or an extra field.
 
 ### A process-wide default client
 
@@ -212,6 +244,22 @@ A **`String`** path is the trusted escape hatch and is sent **verbatim** — so
 **never interpolate untrusted input into a `String` path**; pass an `Array` and
 let the framework encode it. The guarantee is covered by a dedicated,
 adversarial spec (`spec/escape_safety_spec.rb`).
+
+## Changelog
+
+### 0.2.0
+
+- Add a `form:` keyword to `post`/`put`/`patch` for `application/x-www-form-urlencoded`
+  bodies (OAuth token/introspection and other form-encoded endpoints). Responses
+  stay resty: parsed JSON on a 2xx, a typed `ApiError` (with `#body`) on a non-2xx.
+- Add a first-class `put` verb (JSON or `form:` body).
+- Passing both a JSON `payload` and `form:` raises `ArgumentError`; the bodyless
+  verbs (`get`/`delete`) reject `form:`.
+
+### 0.1.0
+
+- Initial release: Net::HTTP transport, typed `ApiError` hierarchy, bang/non-bang
+  resources, pluggable auth, per-call timeouts, escape-safe URL building.
 
 ## Development
 

@@ -97,6 +97,21 @@ RSpec.describe "escape safety" do
     expect(uri.path).not_to include("+")
   end
 
+  # The same load-bearing guarantee for FORM bodies: an untrusted key or value
+  # can NEVER inject a header, a second field, or CRLF — it is percent-encoded.
+  it "percent-encodes CRLF + reserved chars in a form body (no header/field injection)" do
+    captured = nil
+    stub_request(:post, "#{base_url}/oauth/token").to_return do |request|
+      captured = request.body
+      { status: 200, body: "{}" }
+    end
+    client.post(%w[oauth token], form: { a: "x\r\nX-Injected: 1", "k\r\n" => "v" })
+    expect(captured).to include("%0D%0A") # CRLF survives only as its encoding
+    expect(captured).not_to include("\r")
+    expect(captured).not_to include("\n")
+    expect(captured).not_to include("X-Injected:") # never escaped into a raw header/field
+  end
+
   it "sends a trusted String path verbatim (documented escape hatch)" do
     stub = stub_request(:get, "#{base_url}/api/raw/path").to_return(status: 200, body: "{}")
     client.get("/api/raw/path")
