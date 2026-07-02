@@ -159,6 +159,68 @@ than silently dropping a write.
 missing keys to `nil`. Guarding `data && Contact.from(data)` means an empty 2xx
 yields `nil`, not a ghost value object.
 
+## Simulation mode (test without a backend)
+
+Opt-in, in-memory stand-in for the transport: your resource proxies, value
+objects and error handling run **unchanged** against seeded state — no server,
+no WebMock stubs. Nothing is loaded unless you ask:
+`require "http_resource"` never pulls simulation in; the `simulation:` kwarg does.
+
+```ruby
+# 1. In your client gem: subclass the backend and register path handlers on it.
+class MyGem::Simulation::Backend < HttpResource::Simulation::Backend; end
+
+class ContactsHandler
+  def initialize(store) = @store = store
+
+  def call(verb, segments, payload:, params:)
+    contact = @store[:contacts].find { _1["id"].to_s == segments.first }
+    raise HttpResource::ApiError.for_status("not found", status: 404, body: nil) unless contact
+
+    contact
+  end
+end
+MyGem::Simulation::Backend.register("api/contacts", ContactsHandler)
+
+# 2. Build a simulated client — or inject a prepared backend instance.
+client = HttpResource::Client.new(base_url: "https://irrelevant.test", simulation: true)
+client.simulation.seed(contacts: [{ id: 1, email: "a@b.se" }])
+
+client.get(["api", "contacts", 1])   # => { "id" => 1, "email" => "a@b.se" } — no network
+client.get(["api", "contacts", 9])   # => raises NotFoundError (from your handler)
+
+# 3. Inject failures to exercise error paths.
+client.simulation.fail_next(status: 422, body: '{"errors":["bad"]}', on: "contacts")
+```
+
+The pieces:
+
+- **`Simulation::Backend`** — same verb surface as `Client` (signatures,
+  `params:`/`form:`/timeouts) and the same deterministic-bug guards: blank/dot
+  path segments, URI-invalid String paths, payload+`form:` together, and
+  unserializable payloads raise exactly as they would in production, so
+  simulation can't mask a caller bug. Handlers see **what a real server sees**:
+  JSON payloads parsed (string keys), form bodies and query params as decoded
+  string pairs (`params: {}` converges to `nil`, as on the wire). Responses
+  come back as **fresh parsed-JSON copies** — mutating one can't corrupt the
+  store. An unhandled path raises a loud 501 `ServerError` (never `nil`).
+- **Per-subclass registry** — `register(prefix, handler_class)` stores on the
+  receiving subclass; lookup walks the inheritance chain (nearest class with a
+  match wins, longest whole-segment prefix within it). Two client gems can
+  never leak handlers into each other. Handlers are `HandlerClass.new(store)`,
+  memoized per backend instance.
+- **`Simulation::Store`** — collection-agnostic: `store[:anything]`
+  auto-vivifies, `next_id(:collection)` allocates per-collection Integer ids
+  (seeding an explicit id reserves it; duplicates raise), `deep_stringify` is
+  public for handlers building records from payloads.
+- **`fail_next(status:, body:, on:)`** — FIFO one-shot failure injection,
+  checked before handler lookup; `on:` scopes it to paths containing the
+  (slash-normalized) fragment. `reset!` clears store + injections + handlers.
+- **Client seam** — `simulation: true` instantiates
+  `self.class.simulation_backend_class` (override in your Client subclass);
+  `simulation: backend_instance` injects a prepared one. `client.simulation`
+  returns the backend (`nil` in real mode).
+
 ## Error hierarchy
 
 Every failure is an `HttpResource::ApiError` carrying `#status` (an `Integer`, or
@@ -246,6 +308,14 @@ let the framework encode it. The guarantee is covered by a dedicated,
 adversarial spec (`spec/escape_safety_spec.rb`).
 
 ## Changelog
+
+### 0.3.0
+
+- Add opt-in **simulation mode**: `HttpResource::Simulation::Backend`/`Store` +
+  a `simulation:` kwarg on `Client` — exercise a client with no live backend
+  and no stubs. Per-subclass handler registries, collection-agnostic seeded
+  store, FIFO failure injection, full transport parity (same guards, same
+  typed errors). Lazy-loaded: plain `require "http_resource"` is unchanged.
 
 ### 0.2.0
 

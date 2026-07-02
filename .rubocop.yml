@@ -22,10 +22,12 @@ Metrics/BlockLength:
     - "spec/**/*"
 
 # The Client is one cohesive Net::HTTP transport (5 verbs + URI building, escape
-# encoding, request/response handling); splitting it would hurt readability more
-# than the extra lines cost. Roomier ceiling, in line with MethodLength above.
+# encoding, request/response handling, and the simulation seam); splitting it
+# would hurt readability more than the extra lines cost. Roomier ceiling, in
+# line with MethodLength above. Simulation::Backend (the transport's in-memory
+# twin) gets the same room.
 Metrics/ClassLength:
-  Max: 120
+  Max: 145
   Exclude:
     - "spec/**/*"
 

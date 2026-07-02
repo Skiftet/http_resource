@@ -32,14 +32,27 @@ module HttpResource
 
     attr_reader :base_url
 
+    # The simulation backend when built with simulation:; nil in real mode.
+    attr_reader :simulation
+
+    # The Backend class `simulation: true` instantiates. Client-gem subclasses
+    # override this to point at their own Backend subclass (with its own
+    # registered handlers). Only called after the lazy require, so the
+    # constant resolves.
+    def self.simulation_backend_class
+      Simulation::Backend
+    end
+
     def initialize(base_url:, auth: nil, username: nil, password: nil,
-                   open_timeout: DEFAULT_OPEN_TIMEOUT, read_timeout: DEFAULT_READ_TIMEOUT)
+                   open_timeout: DEFAULT_OPEN_TIMEOUT, read_timeout: DEFAULT_READ_TIMEOUT,
+                   simulation: nil)
       raise ConfigurationError, "base_url is required" if blank?(base_url)
 
       @base_url = base_url.to_s.sub(%r{/+\z}, "")
       @auth = auth || default_auth(username, password)
       @open_timeout = open_timeout
       @read_timeout = read_timeout
+      @simulation = setup_simulation(simulation)
     end
 
     # Low-level REST verbs. `path` may be a String ("/api/foo") sent verbatim, or
@@ -78,6 +91,11 @@ module HttpResource
     private
 
     def request(method, path, body: nil, form: nil, params: nil, open_timeout: nil, read_timeout: nil)
+      # In simulation the verb call is handed to the backend BEFORE any URI
+      # build or network I/O — the backend enforces the same deterministic-bug
+      # guards, so a call that raises in production raises identically here.
+      return simulate(method, path, body:, form:, params:) if @simulation
+
       # Build the URI + request OUTSIDE the network rescue: a URI::InvalidURIError
       # (bad path), JSON::GeneratorError (un-serializable payload, e.g. a NaN
       # amount) or an ArgumentError (both a JSON and a form body) is a
@@ -180,6 +198,27 @@ module HttpResource
       JSON.parse(body)
     rescue JSON::JSONError
       body
+    end
+
+    def simulate(method, path, body:, form:, params:)
+      # The public verbs only pass params: on get; reaching this with params
+      # on another verb means private-seam misuse — fail loud, don't drop it.
+      raise ArgumentError, "params: is only supported on get in simulation" if params && method != :get
+
+      case method
+      when :get then @simulation.get(path, params:)
+      when :delete then @simulation.delete(path)
+      else @simulation.public_send(method, path, body, form:)
+      end
+    end
+
+    # Lazy: the simulation machinery is test-facing and never loaded unless
+    # asked for — plain `require "http_resource"` must not pull it in.
+    def setup_simulation(simulation)
+      return nil unless simulation
+
+      require "http_resource/simulation"
+      simulation == true ? self.class.simulation_backend_class.new : simulation
     end
 
     def default_auth(username, password)
